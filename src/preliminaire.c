@@ -19,9 +19,10 @@ int main()
 	//Get the current working directory
 	char currentDir[BUFFER_SIZE+1];
 	getcwd(currentDir, BUFFER_SIZE);
+
+	//Get the host name and the machine
 	char machine[LEN_MACHINE];
 	char userName[LEN_USER];
-	//Get the host name and the machine
 	gethostname(machine, LEN_MACHINE);
 	getlogin_r(userName, LEN_USER);
 
@@ -31,8 +32,6 @@ int main()
 
 	while(1)
 	{
-
-		
 
 		//Print the current directory
 		printf("%s@%s:%s >", userName, machine, currentDir);
@@ -72,13 +71,25 @@ int main()
 		{
 			if(argv[1] == NULL)
 				chdir(homedir);
+
 			else if(argv[1] != NULL && argv[2] == NULL)
-				if(chdir(argv[1]) == -1)
+			{
+				char path[BUFFER_SIZE];
+				if(argv[1][0] == '~')
+				{
+					strcpy(path, homedir);
+					strcpy(path+strlen(homedir), &(argv[1][1]));
+				}
+				else
+					strcpy(path, argv[1]);
+				if(chdir(path) == -1)
 					printf("Error in cd command \n");
+			}
 			
 			//Update it
 			getcwd(currentDir, BUFFER_SIZE);
 		}
+
 
 		else
 		{
@@ -94,6 +105,9 @@ int main()
 				int wstatus;
 				wait(&wstatus); //Wait for the child be finished
 				free(buffer);
+				
+				for(i=0; argv[i]; i++)
+					free(argv[i]);
 			}
 		}
 	}
@@ -131,5 +145,5 @@ void childThread(char** argv)
 { 
 	//Exec the command line
 	if(execvp(argv[0], argv) == -1)
-		printf("Error %d \n", errno);
+		exit(-1);
 }
