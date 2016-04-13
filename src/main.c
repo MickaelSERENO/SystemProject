@@ -12,43 +12,67 @@
 #include "utime.h"
 #include "sys/types.h"
 #include "sys/stat.h"
+#include <pwd.h>
 
 #define BUFFER_SIZE 1023
+#define LEN_USER 50
+#define LEN_MACHINE 50
 
 pid_t childID=0;
 uint32_t interrupt=0;
-void childThread(char** argv);
-void getArgv(char* buffer, char** argv);
-void getSigInt(int sig);
+void childThread(char* path, char** argv);
+void split(const char* buffer, char** argv, char splitChar);
 void handle_int(int num);
 
 int main()
 {
+	//Get the current working directory
 	char currentDir[BUFFER_SIZE+1];
-	char** history=NULL; 
-	uint32_t historyLen=0;
 	getcwd(currentDir, BUFFER_SIZE);
 	uint8_t exit=0;
 
+	//Init history
+	char** history=NULL; 
+	uint32_t historyLen=0;
+
+	//Get the host name and the machine
+	char machine[LEN_MACHINE];
+	char userName[LEN_USER];
+	gethostname(machine, LEN_MACHINE);
+	getlogin_r(userName, LEN_USER);
+
+	//Get the home directory
+	struct passwd *pw = getpwuid(getuid());
+	const char *homedir = pw->pw_dir;
+	
+	//Define a callback to sigint
 	struct sigaction int_handler = {.sa_handler=handle_int};
 	int_handler.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT;
 	sigaction(SIGINT,&int_handler,0);
 
 	while(!exit)
 	{
-		printf("%s >", currentDir);
+		interrupt = 0;
+		//Print the current directory
+		printf("%s@%s:%s >", userName, machine, currentDir);
 		fflush(stdout);
+
+		//buffer : the command line
 		char* buffer=NULL;
-		uint32_t nbRealloc = 0;
+		uint32_t nbRealloc = 0; //Number of times we need to realloc the array
 
 		//get the command
+		//Update the array size
 		buffer = (char*)malloc(sizeof(char)*BUFFER_SIZE + sizeof(char)); //Don't miss the \0 (+sizeof(char))
 		uint32_t i=0;
 		char c;
 
+		//Get command line from stdin
 		while(1) //+1 for the \0
 		{
+			//Get the next character to stdin and get the error if it exist
 			int n = read(STDIN_FILENO, &c, 1);
+			//If we have interrupt from the Ctrl+C (SIGINT)
 			if(interrupt)
 			{
 				interrupt = 0;
@@ -56,6 +80,7 @@ int main()
 				break;
 			}
 
+			//CTRL+D is pressed 
 			else if(n == 0)
 			{
 				printf("\n");
@@ -64,18 +89,22 @@ int main()
 				break;
 			}
 
+			//If the character is a new line
 			else if(c == '\n')
 				break;
 
+			//and save the character to the buffer
 			buffer[i] = c;
 			i++;
+			//Don't forgot to realloc is needed
 			if(i == (nbRealloc+1)*BUFFER_SIZE)
 			{
-				buffer = (char*)realloc(buffer, (nbRealloc+1)*sizeof(char)*BUFFER_SIZE + sizeof(char)); //Don't miss the \0 (+sizeof(char))
 				nbRealloc++;
+				buffer = (char*)realloc(buffer, (nbRealloc+1)*sizeof(char)*BUFFER_SIZE + sizeof(char)); //Don't miss the \0 (+sizeof(char))
 			}
 		}
 
+		//CTRL+D is pressed
 		if(exit == 1)
 		{
 			//Free the buffer and exit the program
@@ -85,11 +114,6 @@ int main()
 			break;
 		}
 
-		if(i==0)
-		{
-			free(buffer);
-			continue;
-		}
 		buffer[i] = '\0';
 
 		//Update the history
@@ -100,24 +124,35 @@ int main()
 
 		//Get the arguments
 		char* argv[1024];
-		getArgv(buffer, argv);
+		split(buffer, argv, ' ');
 		if(argv[0] == NULL)
 			continue;
 
 		//Then treat them if they are arguments for the shell itself
-		//cd
+
+		//cd: If we change the current directory
 		if(!strcmp(argv[0], "cd"))
 		{
-			//Only one argument
-			if(argv[1] != NULL && argv[2] == NULL)
+			if(argv[1] == NULL)
+				chdir(homedir);
+
+			else if(argv[1] != NULL && argv[2] == NULL)
 			{
-				if(chdir(argv[1]) == -1)
-					printf("Error in cd command\n");
+				char path[BUFFER_SIZE];
+				if(argv[1][0] == '~')
+				{
+					strcpy(path, homedir);
+					strcpy(path+strlen(homedir), &(argv[1][1]));
+				}
 				else
-					getcwd(currentDir, BUFFER_SIZE);
+					strcpy(path, argv[1]);
+				printf("path %s argv[1] %s \n", path, argv[1]);
+				if(chdir(path) == -1)
+					printf("Error in cd command \n");
 			}
-			else
-				printf("Haven't got the correct number of arguments \n");
+			
+			//Update it
+			getcwd(currentDir, BUFFER_SIZE);
 		}
 
 		//history
@@ -162,16 +197,17 @@ int main()
 				//Get the character
 				while(n = read(STDIN_FILENO, &c, 1))
 				{
+					//Interrupt has appeared (CTRL + C or CTRL + D)
 					if(interrupt || n == 0)
 					{
 						interrupt = 0;
 						break;
 					}
 
+					//Error has occured, read the character again
 					else if(n==-1)
 						continue;
 
-					catBuffer[i] = c;
 					if(c == '\n')
 					{
 						catBuffer[i] = '\0';
@@ -179,7 +215,9 @@ int main()
 						i = 0;
 						continue;
 					}
+					catBuffer[i] = c;
 					i++;
+
 					//Until we have reach the end of the buffer length
 					if(i == 199)
 					{
@@ -195,30 +233,89 @@ int main()
 			//print the content of files
 			else
 			{
-
+				uint32_t i=1;
+				for(i=1; argv[i]; i++)
+				{
+					FILE* f=fopen(argv[i],"r");
+					if (f==NULL)
+					{
+						printf("Erreur in file\n");
+						continue;
+					}
+					char catBuffer[200];
+					while(fgets(catBuffer, 200, f) != NULL)
+						printf("%s", catBuffer);
+					fclose(f);
+				}
 			}
 		}
 		
-		//other
+		//Else we execute the command line
 		else
 		{
-
-			childID = fork();
-			if(childID == 0)
+			char* programName    = argv[0];
+			uint8_t correctProgramName = 1;
+			if(access(programName, X_OK) == -1) //If the program isn't in our current directory
 			{
-				childThread(argv);
-			}		
+				correctProgramName = 0;
+				//Split the PATH environment value
+				const char* pathEnv = getenv("PATH");
+				char* splitPath[256];
+				split(pathEnv, splitPath, ':');
 
+				//Test for each subPath
+				for(i=0; splitPath[i]; i++)
+				{
+					char testProgram[1024];
+					printf("splitPath[i] %s \n", splitPath[i]);
+					strcpy(testProgram, splitPath[i]);
+					if(splitPath[i][strlen(splitPath[i])-1] == '/')
+						strcpy(testProgram + strlen(splitPath[i]), argv[0]);
+					else
+					{
+						testProgram[strlen(splitPath[i])] = '/';
+						strcpy(testProgram + strlen(splitPath[i])+1, argv[0]);
+					}
+					if(access(testProgram, X_OK) == 0)
+					{
+						strcpy(programName, testProgram);
+						correctProgramName = 1;
+						break;
+					}
+				}
+				//free path splited
+				for(i=0; splitPath[i]; i++)
+					free(splitPath[i]);
+			}
+
+			if(!correctProgramName)
+			{
+				printf("Command not found\n");
+			}
 			else
 			{
-				int wstatus;
-				wait(&wstatus);
-				childID = 0;
+				childID = fork();
+				//We are the child
+				if(childID == 0)
+				{
+					childThread(programName, argv);
+				}		
+				//We are the parent
+				else
+				{
+					//Wait for the child to finish
+					int wstatus;
+					wait(&wstatus);
+					childID = 0;
+				}
 			}
 		}
+		for(i=0; argv[i]; i++)
+			free(argv[i]);
 
 		free(buffer);
 	}
+	//Free history
 	uint32_t i;
 	for(i=0; i < historyLen; i++)
 		free(history[i]);
@@ -236,7 +333,7 @@ void handle_int(int num)
 	}
 }
 
-void getArgv(char* buffer, char** argv)
+void split(const char* buffer, char** argv, char splitChar)
 {
 	uint32_t i=0;
 	uint32_t argc=0;
@@ -244,34 +341,26 @@ void getArgv(char* buffer, char** argv)
 	while(buffer[i] != '\0')
 	{
 		//Cut the buffer
-		uint32_t spaceI;
-		for(spaceI=0; buffer[i+spaceI] != ' ' && buffer[i+spaceI] != '\0'; spaceI++);
+		uint32_t splitI;
+		for(splitI=0; buffer[i+splitI] != splitChar && buffer[i+splitI] != '\0'; splitI++);
 
 		//Get the argument
-		argv[argc] = (char*)malloc(sizeof(char)*spaceI+1);
+		argv[argc] = (char*)malloc(sizeof(char)*splitI+1);
 		uint32_t strCpyI;
-		for(strCpyI=0; strCpyI < spaceI; strCpyI++)
+		for(strCpyI=0; strCpyI < splitI; strCpyI++)
 			argv[argc][strCpyI] = buffer[i+strCpyI];
 
-		argv[argc][spaceI] = '\0';
+		argv[argc][splitI] = '\0';
 		argc++;
 
-		for(spaceI=spaceI; buffer[i+spaceI] == ' '; spaceI++);
-		i+=spaceI;
+		for(splitI=splitI; buffer[i+splitI] == splitChar; splitI++);
+		i+=splitI;
 	}
 	argv[argc] = NULL;
 }
 
-void childThread(char** argv)
+void childThread(char* path, char** argv)
 { 
-	if(execvp(argv[0], argv) == -1)
-		printf("Error %d \n", errno);
-}
-
-void getSigInt(int sig)
-{
-	if(childID != -1)
-	{
-	}
-	fcntl(STDIN_FILENO, F_SETSIG, 0);
+	if(execv(argv[0], argv) == -1)
+		exit(-1);
 }
