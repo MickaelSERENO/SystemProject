@@ -52,6 +52,14 @@ int main()
 
 	while(!exit)
 	{
+		//Define default pipeline
+		FILE* out = stdout;
+		FILE* err = stderr;
+		FILE* in  = stdin;
+	
+		char errMode[2] = "w";
+		char outMode[2] = "w";
+
 		interrupt = 0;
 		//Print the current directory
 		printf("%s@%s:%s >", userName, machine, currentDir);
@@ -127,6 +135,41 @@ int main()
 		split(buffer, argv, ' ');
 		if(argv[0] == NULL)
 			continue;
+
+		
+		uint32_t i;
+		uint32_t commandCorrect = 1;
+		for(i=1; argv[i]; i++)
+		{
+			if(argv[i][0] == '>')
+			{
+				//Check if the command is correct
+				if(!argv[i+1])
+				{
+					commandCorrect = 0;
+					break;
+				}
+
+				else if(argv[i][1] == '\0')
+				{
+				}
+
+				//Change the mode of the pipe
+				else if(argv[i][1] == '>' && argv[i][2] == '\0')
+				{
+					outMode[0] = 'a';
+				}
+				
+				else
+				{
+					commandCorrect = 0;
+					break;
+				}
+				//Then open the file (create it if needed)
+			}
+		}
+		if(commandCorrect == 0)
+			goto endFor;
 
 		//Then treat them if they are arguments for the shell itself
 
@@ -310,6 +353,8 @@ int main()
 				}
 			}
 		}
+
+		endFor:
 		for(i=0; argv[i]; i++)
 			free(argv[i]);
 
