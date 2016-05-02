@@ -5,8 +5,11 @@
 #include "string.h"
 #include "unistd.h"
 #include "errno.h"
+#include <pwd.h>
 
 #define BUFFER_SIZE 1023
+#define LEN_USER 50
+#define LEN_MACHINE 50
 
 void childThread(char** argv);
 void getArgv(char* buffer, char** argv);
@@ -17,10 +20,21 @@ int main()
 	char currentDir[BUFFER_SIZE+1];
 	getcwd(currentDir, BUFFER_SIZE);
 
+	//Get the host name and the machine
+	char machine[LEN_MACHINE];
+	char userName[LEN_USER];
+	gethostname(machine, LEN_MACHINE);
+	getlogin_r(userName, LEN_USER);
+
+	//Get the home directory
+	struct passwd *pw = getpwuid(getuid());
+	const char *homedir = pw->pw_dir;
+
 	while(1)
 	{
+
 		//Print the current directory
-		printf("%s >", currentDir);
+		printf("%s@%s:%s >", userName, machine, currentDir);
 		uint8_t exit=0;
 
 		//buffer : the command line
@@ -34,6 +48,8 @@ int main()
 			//And get the command line
 			if(fgets(buffer + nbRealloc*BUFFER_SIZE, BUFFER_SIZE+1, stdin) == NULL) //+1 for the \0
 			{
+				//ctrl+D
+
 				free(buffer);
 				exit = 1;
 				break;
@@ -50,15 +66,30 @@ int main()
 		char* argv[1024];
 		getArgv(buffer, argv);
 
-		//If we change the current directory
+		//cd: If we change the current directory
 		if(!strcmp(argv[0], "cd"))
 		{
-			if(argv[1] != NULL && argv[2] == NULL)
-				if(chdir(argv[1]) == -1)
+			if(argv[1] == NULL)
+				chdir(homedir);
+
+			else if(argv[1] != NULL && argv[2] == NULL)
+			{
+				char path[BUFFER_SIZE];
+				if(argv[1][0] == '~')
+				{
+					strcpy(path, homedir);
+					strcpy(path+strlen(homedir), &(argv[1][1]));
+				}
+				else
+					strcpy(path, argv[1]);
+				if(chdir(path) == -1)
 					printf("Error in cd command \n");
+			}
+			
 			//Update it
 			getcwd(currentDir, BUFFER_SIZE);
 		}
+
 
 		else
 		{
@@ -74,10 +105,13 @@ int main()
 				int wstatus;
 				wait(&wstatus); //Wait for the child be finished
 				free(buffer);
+				
+				for(i=0; argv[i]; i++)
+					free(argv[i]);
 			}
 		}
 	}
-
+	printf("\n");
 	return 0;
 }
 
@@ -111,5 +145,5 @@ void childThread(char** argv)
 { 
 	//Exec the command line
 	if(execvp(argv[0], argv) == -1)
-		printf("Error %d \n", errno);
+		exit(-1);
 }
