@@ -44,9 +44,11 @@ int main()
 
 	while(!exit)
 	{
+		//Reset the default pipeline
 		out = stdout;
 		err = stderr;
 		in = stdin;	
+
 		char errMode[2] = "w";
 		char outMode[2] = "w";
 
@@ -126,7 +128,7 @@ int main()
 		split(buffer, argv, ' ');
 		if(argv[0] == NULL)
 			continue;
-		
+
 		uint32_t commandCorrect = 1;
 		for(i=1; argv[i]; i++)
 		{
@@ -161,7 +163,6 @@ int main()
 			goto endFor;
 
 		//Then treat them if they are arguments for the shell itself
-
 		//cd: If we change the current directory
 		if(!strcmp(argv[0], "cd"))
 			cd(argv);
