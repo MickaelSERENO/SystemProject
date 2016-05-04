@@ -2,11 +2,15 @@
 #include "global.h"
 #include "cat.h"
 #include "cd.h"
+#include "pthread.h"
+
+char stdoutFileName[BUFFER_SIZE];
+char stderrFileName[BUFFER_SIZE];
 
 //Define default pipeline
-FILE* out = NULL;
-FILE* err = NULL;
-FILE* in  = NULL;
+int out = 0;
+int err = 0;
+int in  = 0;
 
 char currentDir[BUFFER_SIZE+1];
 char machine[LEN_MACHINE];
@@ -18,6 +22,10 @@ uint32_t interrupt=0;
 void childThread(char* path, char** argv);
 void split(const char* buffer, char** argv, char splitChar);
 void handle_int(int num);
+void* getStdoutPipe(void* pipe);
+void* getStderrPipe(void* pipe);
+char stdoutMode='w';
+char stderrMode='w';
 
 int main()
 {
@@ -45,12 +53,17 @@ int main()
 	while(!exit)
 	{
 		//Reset the default pipeline
-		out = stdout;
-		err = stderr;
-		in = stdin;	
-
-		char errMode[2] = "w";
-		char outMode[2] = "w";
+		out = STDOUT_FILENO;
+		err = STDERR_FILENO;
+		in = STDIN_FILENO;	
+		uint8_t hasPipedStdout=0;
+		uint8_t hasPipedStderr=0;
+		
+		pthread_t stdoutThread;
+		pthread_t stderrThread;
+		
+		int stdoutPipe[2];
+		int stderrPipe[2];
 
 		interrupt = 0;
 		//Print the current directory
@@ -72,7 +85,7 @@ int main()
 		{
 			//Get the next character to stdin and get the error if it exist
 			//fileno : get the fd of a FILE*
-			int n = read(fileno(in), &c, 1);
+			int n = read(in, &c, 1);
 			//If we have interrupt from the Ctrl+C (SIGINT)
 			if(interrupt)
 			{
@@ -132,36 +145,79 @@ int main()
 		uint32_t commandCorrect = 1;
 		for(i=1; argv[i]; i++)
 		{
-			if(argv[i][0] == '>')
+			uint32_t j=0;
+			if(!commandCorrect)
+				break;
+			uint8_t willAppend=0;
+			for(j=0; argv[i][j]; j++)
 			{
-				//Check if the command is correct
-				if(!argv[i+1])
+				if(argv[i][j] == '>')
 				{
-					commandCorrect = 0;
-					break;
-				}
+					if(argv[i][j+1] == '>')
+						willAppend=1;
+						
+					//Check if the command is correct
+					if(!argv[i][j+1] || (willAppend && !argv[i][j+2]))
+						commandCorrect = 0;
 
-				else if(argv[i][1] == '\0')
-				{
-				}
-
-				//Change the mode of the pipe
-				else if(argv[i][1] == '>' && argv[i][2] == '\0')
-				{
-					outMode[0] = 'a';
-				}
+					//Redirect stdout
+					else if(j==0 || argv[i][j-1] == '1')
+					{
+						//Get the fileName which will be now the new stdout
+						if(willAppend)
+						{
+							strcpy(stdoutFileName, &(argv[i][j+2]));
+							stdoutMode = 'a';
+						}
+						else
+							strcpy(stdoutFileName, &(argv[i][j+1]));
+						pipe(stdoutPipe);
+						hasPipedStdout=1;
+					}
+					
+					//Redirect stderr
+					else if(argv[i][j-1] == '2')
+					{
+						if(willAppend)
+						{
+							strcpy(stderrFileName, &(argv[i][j+2]));
+							stdoutMode = 'a';
+						}
+						else
+							strcpy(stderrFileName, &(argv[i][j+1]));
+						pipe(stderrPipe);
+						hasPipedStderr=1;
+					}
 				
-				else
-				{
-					commandCorrect = 0;
+					else
+						commandCorrect = 0;
+					
+					free(argv[i]);
+					argv[i] = NULL;
 					break;
 				}
-				//Then open the file (create it if needed)
 			}
 		}
 		if(commandCorrect == 0)
 			goto endFor;
+			
+			//Open it
+			if(hasPipedStderr)
+			{
+				if(stderrMode == 'a')
+					err=open(stderrFileName, O_WRONLY | O_APPEND);
+				else
+					err=open(stderrFileName, O_WRONLY);
+			}
+			
+			else if(hasPipedStdout)
+			{
+				if(stdoutMode == 'a')
+					out = open(stdoutFileName, O_WRONLY | O_APPEND);
+				else
+					out = open(stdoutFileName, O_WRONLY);
 
+			}
 		//Then treat them if they are arguments for the shell itself
 		//cd: If we change the current directory
 		if(!strcmp(argv[0], "cd"))
@@ -175,7 +231,7 @@ int main()
 			{
 				uint32_t i;
 				for(i=0; i < historyLen; i++)
-					printf("%d\t%s\n", i, history[i]);
+					write(out, history[i], strlen(history[i]));
 			}
 		}
 
@@ -210,8 +266,8 @@ int main()
 				//Test for each subPath
 				for(i=0; splitPath[i]; i++)
 				{
+					//Get the full path
 					char testProgram[1024];
-					printf("splitPath[i] %s \n", splitPath[i]);
 					strcpy(testProgram, splitPath[i]);
 					if(splitPath[i][strlen(splitPath[i])-1] == '/')
 						strcpy(testProgram + strlen(splitPath[i]), argv[0]);
@@ -220,6 +276,8 @@ int main()
 						testProgram[strlen(splitPath[i])] = '/';
 						strcpy(testProgram + strlen(splitPath[i])+1, argv[0]);
 					}
+					
+					//Then we look if the path gives a file executable
 					if(access(testProgram, X_OK) == 0)
 					{
 						strcpy(programName, testProgram);
@@ -234,20 +292,46 @@ int main()
 
 			if(!correctProgramName)
 			{
-				printf("Command not found\n");
+				write(err, "Command not found\n", 18);
 			}
+			
 			else
 			{
 				childID = fork();
 				//We are the child
 				if(childID == 0)
 				{
+					if(hasPipedStdout)
+					{
+						dup2(stdoutPipe[1], STDOUT_FILENO);
+						
+						close(stdoutPipe[1]);
+						close(stdoutPipe[0]);
+					}
+					
+					if(hasPipedStderr)
+					{
+						dup2(stderrPipe[1], STDERR_FILENO);
+						close(stderrPipe[1]);
+						close(stderrPipe[0]);
+					}
+					
 					childThread(programName, argv);
 				}		
 				//We are the parent
 				else
 				{
 					//Wait for the child to finish
+					if(hasPipedStdout)
+					{
+						pthread_create(&stdoutThread, NULL, getStdoutPipe, (void*)stdoutPipe);
+					}
+					
+					if(hasPipedStderr)
+					{
+						pthread_create(&stderrThread, NULL, getStderrPipe, (void*)stderrPipe);
+					}
+						
 					int wstatus;
 					wait(&wstatus);
 					childID = 0;
@@ -303,6 +387,42 @@ void split(const char* buffer, char** argv, char splitChar)
 		i+=splitI;
 	}
 	argv[argc] = NULL;
+}
+
+void* getStdoutPipe(void* pipe)
+{
+	int fd = ((int*)pipe)[0];
+							
+	//Create this file if doesn't exist
+	if(access(stdoutFileName, F_OK) == -1)
+		creat(stdoutFileName, 0666);
+
+	//And write the incoming of the stdout
+	char c;
+	while(read(fd, &c, 1)!=0)
+		write(out, &c, sizeof(char));
+		
+	close(fd);
+	close(((int*)pipe)[1]);
+	return NULL;
+}
+
+void* getStderrPipe(void* pipe)
+{
+	int fd = ((int*)pipe)[0];
+							
+	//Create this file if doesn't exist
+	if(access(stderrFileName, F_OK) == -1)
+		creat(stderrFileName, 0666);
+
+	//And write the incoming of the stdout
+	char c;
+	while(read(fd, &c, 1)!=0)
+		write(err, &c, sizeof(char));
+		
+	close(fd);
+	close(((int*)pipe)[1]);
+	return NULL;
 }
 
 void childThread(char* path, char** argv)

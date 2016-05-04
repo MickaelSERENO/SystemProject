@@ -16,15 +16,15 @@
 #include "sys/stat.h"
 #include <pwd.h>
 
-#define BUFFER_SIZE 1023
+#define BUFFER_SIZE 2047
 #define LEN_USER 50
 #define LEN_MACHINE 50
 
 
 //stream to input, error and output
-extern FILE* in;
-extern FILE* err;
-extern FILE* out;
+extern int in;
+extern int err;
+extern int out;
 
 //User settings
 extern char currentDir[BUFFER_SIZE+1];

@@ -27,7 +27,8 @@ void cat(char** argv)
 			if(c == '\n')
 			{
 				catBuffer[i] = '\0';
-				printf("%s\n", catBuffer);
+				write(out, catBuffer, strlen(catBuffer));
+				write(out, "\n", 1);
 				i = 0;
 				continue;
 			}
@@ -41,7 +42,7 @@ void cat(char** argv)
 				catBuffer[i] = '\0';
 				i=0;
 				//and printf the buffer
-				printf("%s", catBuffer);
+				write(out, catBuffer, strlen(catBuffer));
 			}
 		}
 	}
@@ -55,12 +56,12 @@ void cat(char** argv)
 			FILE* f=fopen(argv[i],"r");
 			if (f==NULL)
 			{
-				printf("Erreur in file\n");
+				write(err, "Erreur in file\n", 15);
 				continue;
 			}
 			char catBuffer[200];
 			while(fgets(catBuffer, 200, f) != NULL)
-				printf("%s", catBuffer);
+				write(out, catBuffer, strlen(catBuffer));
 			fclose(f);
 		}
 	}

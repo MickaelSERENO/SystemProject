@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Iinclude
-LDFLAGS = 
+LDFLAGS = -lpthread 
 
 SOURCES = src/main.c src/cat.c src/touch.c src/cd.c
 OBJS    = $(SOURCES:.c=.o)
