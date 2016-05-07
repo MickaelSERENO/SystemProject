@@ -3,6 +3,7 @@
 #include "cat.h"
 #include "cd.h"
 #include "pthread.h"
+#include "Child.h"
 
 char stdoutFileName[BUFFER_SIZE];
 char stderrFileName[BUFFER_SIZE];
@@ -12,20 +13,29 @@ int out = 0;
 int err = 0;
 int in  = 0;
 
+char stdoutMode='w';
+char stderrMode='w';
+
 char currentDir[BUFFER_SIZE+1];
 char machine[LEN_MACHINE];
 char userName[LEN_USER];
 const char* homedir;
 
-pid_t childID=0;
+Child* childID = NULL;
+uint32_t nbChild = 0;
+
 uint32_t interrupt=0;
+uint32_t stopped=0;
+uint32_t currentChildID = 0;
+uint8_t hasCurrentChildID=0;
+
 void childThread(char* path, char** argv);
 void split(const char* buffer, char** argv, char splitChar);
 void handle_int(int num);
+void handle_tstp(int num);
 void* getStdoutPipe(void* pipe);
 void* getStderrPipe(void* pipe);
-char stdoutMode='w';
-char stderrMode='w';
+void waitChild(uint32_t cID);
 
 int main()
 {
@@ -45,10 +55,17 @@ int main()
 	struct passwd *pw = getpwuid(getuid());
 	homedir = pw->pw_dir;
 	
-	//Define a callback to sigint
+	//Define a callback to sigint (CTRL + C)
 	struct sigaction int_handler = {.sa_handler=handle_int};
 	int_handler.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT;
 	sigaction(SIGINT,&int_handler,0);
+
+	//Define a callback to sigtstp (CTRL + Z)
+	struct sigaction tstp_handler = {.sa_handler=handle_tstp};
+	tstp_handler.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT;
+	sigaction(SIGTSTP,&tstp_handler, 0);
+	
+	childID = (Child*)malloc(10*sizeof(Child));
 
 	while(!exit)
 	{
@@ -242,6 +259,24 @@ int main()
 			break;
 		}
 
+		//fg command
+		else if(!strcmp(argv[0], "fg") && argv[1] != NULL && argv[2] == NULL)
+		{
+			uint32_t id = atoi(argv[1]);
+			currentChildID = id;
+			kill(childID[id].pid, SIGCONT);
+			waitChild(id);
+		}
+
+		//bg command
+		else if(!strcmp(argv[0], "bg") && argv[1] != NULL && argv[2] == NULL)
+		{
+			uint32_t id = atoi(argv[1]);
+			kill(childID[id].pid, SIGCONT);
+			//Don't transmit CTRL+C
+			setpgid(childID[id].pid, 0);
+		}
+
 		//touch
 		else if(!strcmp(argv[0], "touch"))
 			touch(argv);
@@ -297,10 +332,11 @@ int main()
 			
 			else
 			{
-				childID = fork();
+				pid_t pid = fork();
 				//We are the child
-				if(childID == 0)
+				if(pid == 0)
 				{
+					int sid = setsid();
 					if(hasPipedStdout)
 					{
 						dup2(stdoutPipe[1], STDOUT_FILENO);
@@ -321,6 +357,15 @@ int main()
 				//We are the parent
 				else
 				{
+					//Save this child id
+					childID[nbChild].pid     = pid;
+					childID[nbChild].stopped = 0;
+					nbChild++;
+
+					//Remember that our array has a max size. Need to be larger
+					if(nbChild % 10 == 0)
+						childID = (Child*)realloc(childID, (10+nbChild)*sizeof(Child));
+
 					//Wait for the child to finish
 					if(hasPipedStdout)
 					{
@@ -331,10 +376,8 @@ int main()
 					{
 						pthread_create(&stderrThread, NULL, getStderrPipe, (void*)stderrPipe);
 					}
-						
-					int wstatus;
-					wait(&wstatus);
-					childID = 0;
+					
+					waitChild(nbChild-1);	
 				}
 			}
 		}
@@ -356,10 +399,28 @@ int main()
 
 void handle_int(int num)
 {
-	if(childID == 0)
+	uint8_t hasKilled = 0;
+	if(nbChild != 0)
 	{
-		printf("\n");
-		interrupt = 1;
+		kill(childID[currentChildID].pid, SIGINT);
+		hasKilled = 1;
+	}
+	if(!hasKilled)
+		interrupt=1;
+	printf("\n");
+}
+
+void handle_tstp(int num)
+{
+	if(nbChild != 0)
+	{
+		if(hasCurrentChildID)
+		{
+			printf("currentChildID %d pid %d \n", currentChildID, childID[currentChildID].pid);
+			kill(childID[currentChildID].pid, SIGSTOP);
+			childID[currentChildID].stopped=1;
+			stopped = 1;
+		}
 	}
 }
 
@@ -423,6 +484,31 @@ void* getStderrPipe(void* pipe)
 	close(fd);
 	close(((int*)pipe)[1]);
 	return NULL;
+}
+
+void waitChild(uint32_t cID)
+{
+	currentChildID = cID;
+	hasCurrentChildID = 1;
+	int wstatus;
+	waitpid(childID[cID].pid, &wstatus, WUNTRACED);
+
+	//Stop the Ctrl + C to be passed to child
+	if(stopped)
+	{
+		hasCurrentChildID = 0;
+		printf("[%d] \t Stopped \n", currentChildID);
+		stopped=0;
+	}
+
+	//The programmed has finished
+	else
+	{
+		nbChild--;
+		uint32_t i;
+		for(i=currentChildID; i < nbChild; i++)
+			childID[i] = childID[i+1];
+	}
 }
 
 void childThread(char* path, char** argv)
