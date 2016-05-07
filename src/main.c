@@ -16,18 +16,27 @@ int in  = 0;
 char stdoutMode='w';
 char stderrMode='w';
 
+int stdoutPipe[2];
+int stderrPipe[2];
+
+uint8_t hasPipedStdout=0;
+uint8_t hasPipedStderr=0;
+
+//Define user configuration
 char currentDir[BUFFER_SIZE+1];
 char machine[LEN_MACHINE];
 char userName[LEN_USER];
 const char* homedir;
 
+//Define all child launched
 Child* childID = NULL;
 uint32_t nbChild = 0;
-
-uint32_t interrupt=0;
-uint32_t stopped=0;
 uint32_t currentChildID = 0;
 uint8_t hasCurrentChildID=0;
+
+//Define interruption
+uint32_t interrupt=0; //CTRL+C
+uint32_t stopped=0; //CTRL+Z
 
 void childThread(char* path, char** argv);
 void split(const char* buffer, char** argv, char splitChar);
@@ -73,15 +82,10 @@ int main()
 		out = STDOUT_FILENO;
 		err = STDERR_FILENO;
 		in = STDIN_FILENO;	
-		uint8_t hasPipedStdout=0;
-		uint8_t hasPipedStderr=0;
-		
-		pthread_t stdoutThread;
-		pthread_t stderrThread;
-		
-		int stdoutPipe[2];
-		int stderrPipe[2];
 
+		hasPipedStdout=0;
+		hasPipedStderr=0;
+		
 		interrupt = 0;
 		//Print the current directory
 		printf("%s@%s:%s >", userName, machine, currentDir);
@@ -221,6 +225,10 @@ int main()
 			//Open it
 			if(hasPipedStderr)
 			{
+				//Create this file if doesn't exist
+				if(access(stderrFileName, F_OK) == -1)
+					creat(stderrFileName, 0777);
+
 				if(stderrMode == 'a')
 					err=open(stderrFileName, O_WRONLY | O_APPEND);
 				else
@@ -229,6 +237,10 @@ int main()
 			
 			else if(hasPipedStdout)
 			{
+				//Create this file if doesn't exist
+				if(access(stdoutFileName, F_OK) == -1)
+					creat(stdoutFileName, 0666);
+
 				if(stdoutMode == 'a')
 					out = open(stdoutFileName, O_WRONLY | O_APPEND);
 				else
@@ -336,22 +348,19 @@ int main()
 				//We are the child
 				if(pid == 0)
 				{
-					int sid = setsid();
 					if(hasPipedStdout)
 					{
 						dup2(stdoutPipe[1], STDOUT_FILENO);
-						
 						close(stdoutPipe[1]);
-						close(stdoutPipe[0]);
 					}
 					
 					if(hasPipedStderr)
 					{
 						dup2(stderrPipe[1], STDERR_FILENO);
 						close(stderrPipe[1]);
-						close(stderrPipe[0]);
 					}
 					
+					int sid = setsid();
 					childThread(programName, argv);
 				}		
 				//We are the parent
@@ -360,23 +369,21 @@ int main()
 					//Save this child id
 					childID[nbChild].pid     = pid;
 					childID[nbChild].stopped = 0;
+					childID[nbChild].errPipe[0] = stderrPipe[0];
+					childID[nbChild].errPipe[1] = stderrPipe[2];
+
+					childID[nbChild].outPipe[0] = stdoutPipe[0];
+					childID[nbChild].outPipe[1] = stdoutPipe[2];
+
+					childID[nbChild].out = out;
+					childID[nbChild].err = err;
+
 					nbChild++;
 
 					//Remember that our array has a max size. Need to be larger
 					if(nbChild % 10 == 0)
 						childID = (Child*)realloc(childID, (10+nbChild)*sizeof(Child));
 
-					//Wait for the child to finish
-					if(hasPipedStdout)
-					{
-						pthread_create(&stdoutThread, NULL, getStdoutPipe, (void*)stdoutPipe);
-					}
-					
-					if(hasPipedStderr)
-					{
-						pthread_create(&stderrThread, NULL, getStderrPipe, (void*)stderrPipe);
-					}
-					
 					waitChild(nbChild-1);	
 				}
 			}
@@ -450,39 +457,29 @@ void split(const char* buffer, char** argv, char splitChar)
 	argv[argc] = NULL;
 }
 
-void* getStdoutPipe(void* pipe)
+void* getStdoutPipe(void* data)
 {
-	int fd = ((int*)pipe)[0];
+	Child *child = (Child*)data;
+	int fd = child->outPipe[0];
 							
-	//Create this file if doesn't exist
-	if(access(stdoutFileName, F_OK) == -1)
-		creat(stdoutFileName, 0666);
-
 	//And write the incoming of the stdout
 	char c;
 	while(read(fd, &c, 1)!=0)
-		write(out, &c, sizeof(char));
+		write(child->out, &c, sizeof(char));
 		
-	close(fd);
-	close(((int*)pipe)[1]);
 	return NULL;
 }
 
-void* getStderrPipe(void* pipe)
+void* getStderrPipe(void* data)
 {
-	int fd = ((int*)pipe)[0];
+	Child *child = (Child*)data;
+	int fd = child->errPipe[0];
 							
-	//Create this file if doesn't exist
-	if(access(stderrFileName, F_OK) == -1)
-		creat(stderrFileName, 0666);
-
 	//And write the incoming of the stdout
 	char c;
 	while(read(fd, &c, 1)!=0)
-		write(err, &c, sizeof(char));
+		write(child->err, &c, sizeof(char));
 		
-	close(fd);
-	close(((int*)pipe)[1]);
 	return NULL;
 }
 
@@ -490,10 +487,18 @@ void waitChild(uint32_t cID)
 {
 	currentChildID = cID;
 	hasCurrentChildID = 1;
+
+	//Need to look for the pipelines
+	if(hasPipedStdout)
+		pthread_create(&(childID[cID].stdoutThread), NULL, getStdoutPipe, (void*)(&childID[cID]));
+	
+	if(hasPipedStderr)
+		pthread_create(&(childID[cID].stderrThread), NULL, getStderrPipe, (void*)(&childID[cID]));
+
 	int wstatus;
 	waitpid(childID[cID].pid, &wstatus, WUNTRACED);
 
-	//Stop the Ctrl + C to be passed to child
+	//CTRL+Z done
 	if(stopped)
 	{
 		hasCurrentChildID = 0;
