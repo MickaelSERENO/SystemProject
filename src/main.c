@@ -2,8 +2,8 @@
 #include "global.h"
 #include "cat.h"
 #include "cd.h"
-#include "pthread.h"
 #include "Child.h"
+#include "pthread.h"
 
 char stdoutFileName[BUFFER_SIZE];
 char stderrFileName[BUFFER_SIZE];
