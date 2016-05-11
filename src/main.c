@@ -393,7 +393,8 @@ int main()
 						close(stderrPipe[1]);
 					}
 					
-					int sid = setsid();
+					setsid();
+					setpgid(pid, 0);
 					childThread(programName, argv);
 				}		
 				//We are the parent
@@ -442,7 +443,7 @@ int main()
 void handle_int(int num)
 {
 	uint8_t hasKilled = 0;
-	if(nbChild != 0)
+	if(hasCurrentChildID)
 	{
 		kill(childID[currentChildID].pid, SIGINT);
 		hasKilled = 1;
