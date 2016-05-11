@@ -10,6 +10,7 @@ typedef struct Child
 	int errPipe[2];
 	int out;
 	int err;
+	char command[2048];
 	uint8_t stopped;
 	pthread_t stdoutThread;
 	pthread_t stderrThread;
