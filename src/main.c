@@ -285,6 +285,7 @@ int main()
 		{
 			uint32_t id = atoi(argv[1]);
 			kill(childID[id].pid, SIGCONT);
+			childID[id].stopped=0;
 			//Don't transmit CTRL+C
 			setpgid(childID[id].pid, 0);
 		}
@@ -300,25 +301,26 @@ int main()
 		else if(!strcmp(argv[0], "jobs"))
 		{
 			uint32_t i;
-			for(i=0; nbChild; i++)
+			for(i=0; i < nbChild; i++)
 			{
 				char line[1024];
-				itoi(line, nbChild);
+				sprintf(line, "%d", i);
 				write(out, "[", 1);
 				write(out, line, strlen(line));
 				write(out, "]", 1);
 				
 				write(out, "\t", 1);
+				write(out, "[", 1);
 
 				if(childID[i].stopped)
-				{
-					write(out, "[", 1);
+					write(out, "STOPPED", 7);
+				else
 					write(out, "RUNNING", 7);
-					write(out, "]", 1);
-				}
+				write(out, "]", 1);
 
 				write(out, "\t\t", 2);
 				write(out, childID[i].command, strlen(childID[i].command));
+				write(out, "\n", 1);
 			}
 		}
 
