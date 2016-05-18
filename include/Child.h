@@ -8,6 +8,7 @@ typedef struct Child
 	uint32_t pid;
 	int outPipe[2];
 	int errPipe[2];
+	int inPipe[2];
 	int out;
 	int err;
 	char command[2048];

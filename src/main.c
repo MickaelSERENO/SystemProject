@@ -1,26 +1,30 @@
 #define _GNU_SOURCE
-#include "global.h"
+#include "touch.h"
 #include "cat.h"
 #include "cd.h"
 #include "Child.h"
 #include "pthread.h"
-
-char stdoutFileName[BUFFER_SIZE];
-char stderrFileName[BUFFER_SIZE];
+#include "global.h"
+#include "job.h"
 
 //Define default pipeline
 int out = 0;
 int err = 0;
 int in  = 0;
 
+int stdoutPipe[2];
+int stderrPipe[2];
+int stdinPipe[2];
+
+char stdoutFileName[BUFFER_SIZE];
+char stderrFileName[BUFFER_SIZE];
+
 char stdoutMode='w';
 char stderrMode='w';
 
-int stdoutPipe[2];
-int stderrPipe[2];
-
 uint8_t hasPipedStdout=0;
 uint8_t hasPipedStderr=0;
+uint8_t hasPipedStdin=0;
 
 //Define user configuration
 char currentDir[BUFFER_SIZE+1];
@@ -29,33 +33,27 @@ char userName[LEN_USER];
 const char* homedir;
 
 //Define all child launched
-Child* childID = NULL;
-uint32_t nbChild = 0;
 uint32_t currentChildID = 0;
 uint8_t hasCurrentChildID=0;
+uint32_t currentJobID=0;
+uint8_t hasCurrentJobID=0;
+
+Job*  jobID=NULL;
+uint32_t nbJob=0;
 
 //Define interruption
 uint32_t interrupt=0; //CTRL+C
 uint32_t stopped=0; //CTRL+Z
 
-void childThread(char* path, char** argv);
-void split(const char* buffer, char** argv, char splitChar);
-void handle_int(int num);
-void handle_tstp(int num);
-void* getStdoutPipe(void* pipe);
-void* getStderrPipe(void* pipe);
-void waitChild(uint32_t cID);
+char** history=NULL; 
+uint32_t historyLen=0;
+
+uint8_t quit=0;
 
 int main()
 {
-	uint8_t exit=0;
-
 	//Get the current working directory
 	getcwd(currentDir, BUFFER_SIZE);
-
-	//Init history
-	char** history=NULL; 
-	uint32_t historyLen=0;
 
 	//Get the host name and the machine
 	gethostname(machine, LEN_MACHINE);
@@ -75,9 +73,10 @@ int main()
 	tstp_handler.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT;
 	sigaction(SIGTSTP,&tstp_handler, 0);
 	
-	childID = (Child*)malloc(10*sizeof(Child));
+	jobID = (Job*)malloc(10*sizeof(Job));
+	nbJob=0;
 
-	while(!exit)
+	while(!quit)
 	{
 		//Reset the default pipeline
 		out = STDOUT_FILENO;
@@ -86,6 +85,7 @@ int main()
 
 		hasPipedStdout=0;
 		hasPipedStderr=0;
+		hasPipedStdin=0;
 		
 		interrupt = 0;
 
@@ -104,7 +104,7 @@ int main()
 		char c;
 
 		//Get command line from stdin
-		while(1)
+		while(!quit)
 		{
 			//Get the next character to stdin and get the error if it exist
 			int n = read(in, &c, 1);
@@ -121,7 +121,7 @@ int main()
 			{
 				printf("\n");
 				i = 0;
-				exit = 1;
+				quit = 1;
 				break;
 			}
 
@@ -141,11 +141,11 @@ int main()
 		}
 
 		//CTRL+D is pressed
-		if(exit == 1)
+		if(quit == 1)
 		{
-			//Free the buffer and exit the program
+			//Free the buffer and quit the program
 			free(buffer);
-			exit=1;
+			quit=1;
 			// break from while
 			break;
 		}
@@ -158,303 +158,23 @@ int main()
 		strcpy(history[historyLen], buffer);
 		historyLen++;
 
-		//Get the arguments
-		char* argv[1024];
-		split(buffer, argv, ' ');
-		if(argv[0] == NULL)
-			continue;
+		char* jobCommand[1024];
+		split(buffer, jobCommand, '|');
+		sprintf(jobID[nbJob].command, "%s", buffer);
+		jobID[nbJob].childID = (Child*)malloc(10*sizeof(Child));
+		jobID[nbJob].nbChild = 0;
 
-		//Define redirection
-		uint32_t commandCorrect = 1;
-		for(i=1; argv[i]; i++)
+		nbJob++;
+		if(nbJob % 10 == 0)
+			jobID = realloc(jobID, (10+nbJob)*sizeof(Job));
+
+		for(i=0; jobCommand[i]; i++)
 		{
-			uint32_t j=0;
-			if(!commandCorrect)
-				break;
-
-			uint8_t willAppend=0;
-			for(j=0; argv[i][j]; j++)
-			{
-				if(argv[i][j] == '>')
-				{
-					if(argv[i][j+1] == '>')
-						willAppend=1;
-						
-					//Check if the command is correct
-					if(!argv[i][j+1] || (willAppend && !argv[i][j+2]))
-						commandCorrect = 0;
-
-					//Redirect stdout
-					else if(j==0 || argv[i][j-1] == '1')
-					{
-						//Get the fileName which will be now the new stdout
-						if(willAppend)
-						{
-							strcpy(stdoutFileName, &(argv[i][j+2]));
-							stdoutMode = 'a';
-						}
-						else
-							strcpy(stdoutFileName, &(argv[i][j+1]));
-						pipe(stdoutPipe);
-						hasPipedStdout=1;
-					}
-					
-					//Redirect stderr
-					else if(argv[i][j-1] == '2')
-					{
-						if(willAppend)
-						{
-							strcpy(stderrFileName, &(argv[i][j+2]));
-							stdoutMode = 'a';
-						}
-						else
-							strcpy(stderrFileName, &(argv[i][j+1]));
-						pipe(stderrPipe);
-						hasPipedStderr=1;
-					}
-				
-					else
-						commandCorrect = 0;
-					
-					free(argv[i]);
-					argv[i] = NULL;
-					break;
-				}
-			}
+			execCommand(jobCommand[i], jobCommand[i+1] == NULL);
+			free(jobCommand[i]);
 		}
-
-		//Stop this command
-		if(commandCorrect == 0)
-			goto endFor;
-			
-		//Open pipelines if needed
-		if(hasPipedStderr)
-		{
-			//Create this file if doesn't exist
-			if(access(stderrFileName, F_OK) == -1)
-				creat(stderrFileName, 0777);
-
-			if(stderrMode == 'a')
-				err=open(stderrFileName, O_WRONLY | O_APPEND);
-			else
-				err=open(stderrFileName, O_WRONLY);
-		}
-		
-		else if(hasPipedStdout)
-		{
-			//Create this file if doesn't exist
-			if(access(stdoutFileName, F_OK) == -1)
-				creat(stdoutFileName, 0666);
-
-			if(stdoutMode == 'a')
-				out = open(stdoutFileName, O_WRONLY | O_APPEND);
-			else
-				out = open(stdoutFileName, O_WRONLY);
-
-		}
-
-		//Then treat them if they are arguments for the shell itself
-		//cd: If we change the current directory
-		if(!strcmp(argv[0], "cd"))
-			cd(argv);
-
-		//history
-		//the variable history can't be NULL
-		else if(!strcmp(argv[0], "history"))
-		{
-			if(argv[1] == NULL)
-			{
-				uint32_t i;
-				for(i=0; i < historyLen; i++)
-					write(out, history[i], strlen(history[i]));
-			}
-		}
-
-		//exit and quit
-		else if(!strcmp(argv[0], "exit") || !strcmp(argv[0], "quit"))
-		{
-			exit = 1;
-			break;
-		}
-
-		//fg command
-		else if(!strcmp(argv[0], "fg") && argv[1] != NULL && argv[2] == NULL)
-		{
-			uint32_t id = atoi(argv[1]);
-			if(id < nbChild)
-			{
-				currentChildID = id;
-				kill(childID[id].pid, SIGCONT);
-				waitChild(id);
-			}
-		}
-
-		//bg command
-		else if(!strcmp(argv[0], "bg") && argv[1] != NULL && argv[2] == NULL)
-		{
-			uint32_t id = atoi(argv[1]);
-			kill(childID[id].pid, SIGCONT);
-			childID[id].stopped=0;
-			//Don't transmit CTRL+C
-			setpgid(childID[id].pid, 0);
-		}
-
-		//kill command
-		else if(!strcmp(argv[0], "kill"))
-		{
-			uint32_t i;
-			for(i=1; argv[i]; i++)
-				kill(atoi(argv[i]), SIGINT);
-		}
-
-		else if(!strcmp(argv[0], "jobs"))
-		{
-			uint32_t i;
-			for(i=0; i < nbChild; i++)
-			{
-				char line[1024];
-				sprintf(line, "%d", i);
-				write(out, "[", 1);
-				write(out, line, strlen(line));
-				write(out, "]", 1);
-				
-				write(out, "\t", 1);
-				write(out, "[", 1);
-
-				if(childID[i].stopped)
-					write(out, "STOPPED", 7);
-				else
-					write(out, "RUNNING", 7);
-				write(out, "]", 1);
-
-				write(out, "\t\t", 2);
-				write(out, childID[i].command, strlen(childID[i].command));
-				write(out, "\n", 1);
-			}
-		}
-
-		//touch
-		else if(!strcmp(argv[0], "touch"))
-			touch(argv);
-
-		//cat
-		else if(!strcmp(argv[0], "cat"))
-			cat(argv);
-
-		//copy
-		else if(!strcmp(argv[0], "cp") && argv[1] != NULL && argv[2] != NULL)
-			copy(argv[1], argv[2]);
-		
-		//Else we execute the command line
-		else
-		{
-			//Get the path of the program called
-			char* programName    = argv[0];
-			uint8_t correctProgramName = 1;
-			if(access(programName, X_OK) == -1) //If the program isn't in our current directory
-			{
-				correctProgramName = 0;
-				//Split the PATH environment value
-				const char* pathEnv = getenv("PATH");
-				char* splitPath[256];
-				split(pathEnv, splitPath, ':');
-
-				//Test for each subPath
-				for(i=0; splitPath[i]; i++)
-				{
-					//Get the full path
-					char testProgram[1024];
-					strcpy(testProgram, splitPath[i]);
-					if(splitPath[i][strlen(splitPath[i])-1] == '/')
-						strcpy(testProgram + strlen(splitPath[i]), argv[0]);
-					else
-					{
-						testProgram[strlen(splitPath[i])] = '/';
-						strcpy(testProgram + strlen(splitPath[i])+1, argv[0]);
-					}
-					
-					//Then we look if the path gives a file executable
-					if(access(testProgram, X_OK) == 0)
-					{
-						strcpy(programName, testProgram);
-						correctProgramName = 1;
-						break;
-					}
-				}
-				//free path splited
-				for(i=0; splitPath[i]; i++)
-					free(splitPath[i]);
-			}
-
-			if(!correctProgramName)
-			{
-				write(err, "Command not found\n", 18);
-			}
-			
-			else
-			{
-				pid_t pid = fork();
-
-				//We are the child
-				if(pid == 0)
-				{
-					if(hasPipedStdout)
-					{
-						dup2(stdoutPipe[1], STDOUT_FILENO);
-						close(stdoutPipe[1]);
-					}
-					
-					if(hasPipedStderr)
-					{
-						dup2(stderrPipe[1], STDERR_FILENO);
-						close(stderrPipe[1]);
-					}
-					
-					//Use for the CTRL+C
-					setsid();
-					setpgid(pid, 0);
-
-					//Execute the child
-					childThread(programName, argv);
-				}		
-
-				//We are the parent
-				else
-				{
-					//Save this child id
-					childID[nbChild].pid     = pid;
-					childID[nbChild].stopped = 0;
-					childID[nbChild].errPipe[0] = stderrPipe[0];
-					childID[nbChild].errPipe[1] = stderrPipe[2];
-
-					childID[nbChild].outPipe[0] = stdoutPipe[0];
-					childID[nbChild].outPipe[1] = stdoutPipe[2];
-
-					close(childID[nbChild].outPipe[1]);
-					close(childID[nbChild].errPipe[1]);
-
-					childID[nbChild].out = out;
-					childID[nbChild].err = err;
-
-					strcpy(childID[nbChild].command, buffer);
-
-					nbChild++;
-
-					//Remember that our array has a max size. Need to be larger
-					if(nbChild % 10 == 0)
-						childID = (Child*)realloc(childID, (10+nbChild)*sizeof(Child));
-
-					waitChild(nbChild-1);	
-				}
-			}
-		}
-
-		endFor:
-		for(i=0; argv[i]; i++)
-			free(argv[i]);
-
-		free(buffer);
 	}
+
 	//Free history
 	uint32_t i;
 	for(i=0; i < historyLen; i++)
@@ -462,125 +182,4 @@ int main()
 	free(history);
 
 	return 0;
-}
-
-void handle_int(int num)
-{
-	uint8_t hasKilled = 0;
-	if(hasCurrentChildID)
-	{
-		kill(childID[currentChildID].pid, SIGINT);
-		hasKilled = 1;
-	}
-
-	if(!hasKilled)
-		interrupt=1;
-	printf("\n");
-}
-
-void handle_tstp(int num)
-{
-	if(nbChild != 0)
-	{
-		if(hasCurrentChildID)
-		{
-			kill(childID[currentChildID].pid, SIGSTOP);
-			childID[currentChildID].stopped=1;
-			stopped = 1;
-		}
-	}
-}
-
-void split(const char* buffer, char** argv, char splitChar)
-{
-	uint32_t i=0;
-	uint32_t argc=0;
-
-	while(buffer[i] != '\0')
-	{
-		//Cut the buffer
-		uint32_t splitI;
-		for(splitI=0; buffer[i+splitI] != splitChar && buffer[i+splitI] != '\0'; splitI++);
-
-		//Get the argument
-		argv[argc] = (char*)malloc(sizeof(char)*splitI+1);
-		uint32_t strCpyI;
-		for(strCpyI=0; strCpyI < splitI; strCpyI++)
-			argv[argc][strCpyI] = buffer[i+strCpyI];
-
-		argv[argc][splitI] = '\0';
-		argc++;
-
-		for(splitI=splitI; buffer[i+splitI] == splitChar; splitI++);
-		i+=splitI;
-	}
-	argv[argc] = NULL;
-}
-
-void* getStdoutPipe(void* data)
-{
-	Child *child = (Child*)data;
-	int fd = child->outPipe[0];
-							
-	//And write the incoming of the stdout
-	char c;
-	while(read(fd, &c, 1)!=0)
-		write(child->out, &c, sizeof(char));
-		
-	close(child->out);
-	return NULL;
-}
-
-void* getStderrPipe(void* data)
-{
-	Child *child = (Child*)data;
-	int fd = child->errPipe[0];
-							
-	//And write the incoming of the stdout
-	char c;
-	while(read(fd, &c, 1)!=0)
-		write(child->err, &c, sizeof(char));
-
-	close(child->err);
-		
-	return NULL;
-}
-
-void waitChild(uint32_t cID)
-{
-	currentChildID = cID;
-	hasCurrentChildID = 1;
-
-	//Need to look for the pipelines
-	if(hasPipedStdout)
-		pthread_create(&(childID[cID].stdoutThread), NULL, getStdoutPipe, (void*)(&childID[cID]));
-	
-	if(hasPipedStderr)
-		pthread_create(&(childID[cID].stderrThread), NULL, getStderrPipe, (void*)(&childID[cID]));
-
-	int wstatus;
-	waitpid(childID[cID].pid, &wstatus, WUNTRACED);
-
-	//CTRL+Z done
-	if(stopped)
-	{
-		hasCurrentChildID = 0;
-		printf("[%d] \t Stopped \n", currentChildID);
-		stopped=0;
-	}
-
-	//The programmed has finished
-	else
-	{
-		nbChild--;
-		uint32_t i;
-		for(i=currentChildID; i < nbChild; i++)
-			childID[i] = childID[i+1];
-	}
-}
-
-void childThread(char* path, char** argv)
-{ 
-	if(execv(argv[0], argv) == -1)
-		exit(-1);
 }

@@ -1,8 +1,8 @@
 CC = gcc
-CFLAGS = -Wall -Iinclude
+CFLAGS = -Wall -Iinclude -g
 LDFLAGS = -lpthread 
 
-SOURCES = src/main.c src/cat.c src/touch.c src/cd.c src/copy.c
+SOURCES = src/main.c src/cat.c src/touch.c src/cd.c src/copy.c src/command.c src/job.c
 OBJS    = $(SOURCES:.c=.o)
 
 all : $(SOURCES) system
