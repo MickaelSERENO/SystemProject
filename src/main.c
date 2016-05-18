@@ -48,9 +48,10 @@ void waitChild(uint32_t cID);
 
 int main()
 {
+	uint8_t exit=0;
+
 	//Get the current working directory
 	getcwd(currentDir, BUFFER_SIZE);
-	uint8_t exit=0;
 
 	//Init history
 	char** history=NULL; 
@@ -87,6 +88,7 @@ int main()
 		hasPipedStderr=0;
 		
 		interrupt = 0;
+
 		//Print the current directory
 		printf("%s@%s:%s >", userName, machine, currentDir);
 		fflush(stdout);
@@ -95,17 +97,16 @@ int main()
 		char* buffer=NULL;
 		uint32_t nbRealloc = 0; //Number of times we need to realloc the array
 
-		//get the command
 		//Update the array size
 		buffer = (char*)malloc(sizeof(char)*BUFFER_SIZE + sizeof(char)); //Don't miss the \0 (+sizeof(char))
+
 		uint32_t i=0;
 		char c;
 
 		//Get command line from stdin
-		while(1) //+1 for the \0
+		while(1)
 		{
 			//Get the next character to stdin and get the error if it exist
-			//fileno : get the fd of a FILE*
 			int n = read(in, &c, 1);
 			//If we have interrupt from the Ctrl+C (SIGINT)
 			if(interrupt)
@@ -128,10 +129,10 @@ int main()
 			else if(c == '\n')
 				break;
 
-			//and save the character to the buffer
+			//and save the character in the buffer
 			buffer[i] = c;
 			i++;
-			//Don't forgot to realloc is needed
+			//Don't forgot to realloc if needed
 			if(i == (nbRealloc+1)*BUFFER_SIZE)
 			{
 				nbRealloc++;
@@ -163,12 +164,14 @@ int main()
 		if(argv[0] == NULL)
 			continue;
 
+		//Define redirection
 		uint32_t commandCorrect = 1;
 		for(i=1; argv[i]; i++)
 		{
 			uint32_t j=0;
 			if(!commandCorrect)
 				break;
+
 			uint8_t willAppend=0;
 			for(j=0; argv[i][j]; j++)
 			{
@@ -219,34 +222,37 @@ int main()
 				}
 			}
 		}
+
+		//Stop this command
 		if(commandCorrect == 0)
 			goto endFor;
 			
-			//Open it
-			if(hasPipedStderr)
-			{
-				//Create this file if doesn't exist
-				if(access(stderrFileName, F_OK) == -1)
-					creat(stderrFileName, 0777);
+		//Open pipelines if needed
+		if(hasPipedStderr)
+		{
+			//Create this file if doesn't exist
+			if(access(stderrFileName, F_OK) == -1)
+				creat(stderrFileName, 0777);
 
-				if(stderrMode == 'a')
-					err=open(stderrFileName, O_WRONLY | O_APPEND);
-				else
-					err=open(stderrFileName, O_WRONLY);
-			}
-			
-			else if(hasPipedStdout)
-			{
-				//Create this file if doesn't exist
-				if(access(stdoutFileName, F_OK) == -1)
-					creat(stdoutFileName, 0666);
+			if(stderrMode == 'a')
+				err=open(stderrFileName, O_WRONLY | O_APPEND);
+			else
+				err=open(stderrFileName, O_WRONLY);
+		}
+		
+		else if(hasPipedStdout)
+		{
+			//Create this file if doesn't exist
+			if(access(stdoutFileName, F_OK) == -1)
+				creat(stdoutFileName, 0666);
 
-				if(stdoutMode == 'a')
-					out = open(stdoutFileName, O_WRONLY | O_APPEND);
-				else
-					out = open(stdoutFileName, O_WRONLY);
+			if(stdoutMode == 'a')
+				out = open(stdoutFileName, O_WRONLY | O_APPEND);
+			else
+				out = open(stdoutFileName, O_WRONLY);
 
-			}
+		}
+
 		//Then treat them if they are arguments for the shell itself
 		//cd: If we change the current directory
 		if(!strcmp(argv[0], "cd"))
@@ -275,9 +281,12 @@ int main()
 		else if(!strcmp(argv[0], "fg") && argv[1] != NULL && argv[2] == NULL)
 		{
 			uint32_t id = atoi(argv[1]);
-			currentChildID = id;
-			kill(childID[id].pid, SIGCONT);
-			waitChild(id);
+			if(id < nbChild)
+			{
+				currentChildID = id;
+				kill(childID[id].pid, SIGCONT);
+				waitChild(id);
+			}
 		}
 
 		//bg command
@@ -296,10 +305,15 @@ int main()
 		//cat
 		else if(!strcmp(argv[0], "cat"))
 			cat(argv);
+
+		//copy
+		else if(!strcmp(argv[0], "cp") && argv[1] != NULL && argv[2] != NULL)
+			copy(argv[1], argv[2]);
 		
 		//Else we execute the command line
 		else
 		{
+			//Get the path of the program called
 			char* programName    = argv[0];
 			uint8_t correctProgramName = 1;
 			if(access(programName, X_OK) == -1) //If the program isn't in our current directory
@@ -345,6 +359,7 @@ int main()
 			else
 			{
 				pid_t pid = fork();
+
 				//We are the child
 				if(pid == 0)
 				{
@@ -360,10 +375,14 @@ int main()
 						close(stderrPipe[1]);
 					}
 					
+					//Use for the CTRL+C
 					setsid();
 					setpgid(pid, 0);
+
+					//Execute the child
 					childThread(programName, argv);
 				}		
+
 				//We are the parent
 				else
 				{
@@ -375,6 +394,9 @@ int main()
 
 					childID[nbChild].outPipe[0] = stdoutPipe[0];
 					childID[nbChild].outPipe[1] = stdoutPipe[2];
+
+					close(childID[nbChild].outPipe[1]);
+					close(childID[nbChild].errPipe[1]);
 
 					childID[nbChild].out = out;
 					childID[nbChild].err = err;
@@ -424,7 +446,6 @@ void handle_tstp(int num)
 	{
 		if(hasCurrentChildID)
 		{
-			printf("currentChildID %d pid %d \n", currentChildID, childID[currentChildID].pid);
 			kill(childID[currentChildID].pid, SIGSTOP);
 			childID[currentChildID].stopped=1;
 			stopped = 1;
@@ -468,6 +489,7 @@ void* getStdoutPipe(void* data)
 	while(read(fd, &c, 1)!=0)
 		write(child->out, &c, sizeof(char));
 		
+	close(child->out);
 	return NULL;
 }
 
@@ -480,6 +502,8 @@ void* getStderrPipe(void* data)
 	char c;
 	while(read(fd, &c, 1)!=0)
 		write(child->err, &c, sizeof(char));
+
+	close(child->err);
 		
 	return NULL;
 }
