@@ -294,8 +294,43 @@ int main()
 		{
 			uint32_t id = atoi(argv[1]);
 			kill(childID[id].pid, SIGCONT);
+			childID[id].stopped=0;
 			//Don't transmit CTRL+C
 			setpgid(childID[id].pid, 0);
+		}
+
+		//kill command
+		else if(!strcmp(argv[0], "kill"))
+		{
+			uint32_t i;
+			for(i=1; argv[i]; i++)
+				kill(atoi(argv[i]), SIGINT);
+		}
+
+		else if(!strcmp(argv[0], "jobs"))
+		{
+			uint32_t i;
+			for(i=0; i < nbChild; i++)
+			{
+				char line[1024];
+				sprintf(line, "%d", i);
+				write(out, "[", 1);
+				write(out, line, strlen(line));
+				write(out, "]", 1);
+				
+				write(out, "\t", 1);
+				write(out, "[", 1);
+
+				if(childID[i].stopped)
+					write(out, "STOPPED", 7);
+				else
+					write(out, "RUNNING", 7);
+				write(out, "]", 1);
+
+				write(out, "\t\t", 2);
+				write(out, childID[i].command, strlen(childID[i].command));
+				write(out, "\n", 1);
+			}
 		}
 
 		//touch
@@ -401,6 +436,8 @@ int main()
 					childID[nbChild].out = out;
 					childID[nbChild].err = err;
 
+					strcpy(childID[nbChild].command, buffer);
+
 					nbChild++;
 
 					//Remember that our array has a max size. Need to be larger
@@ -435,6 +472,7 @@ void handle_int(int num)
 		kill(childID[currentChildID].pid, SIGINT);
 		hasKilled = 1;
 	}
+
 	if(!hasKilled)
 		interrupt=1;
 	printf("\n");
