@@ -111,7 +111,6 @@ int main()
 			//If we have interrupt from the Ctrl+C (SIGINT)
 			if(interrupt)
 			{
-				interrupt = 0;
 				i=0;
 				break;
 			}
@@ -151,6 +150,13 @@ int main()
 		}
 
 		buffer[i] = '\0';
+
+		if(interrupt || buffer[0] == '\0')
+		{
+			interrupt = 0;
+			free(buffer);
+			continue;
+		}
 
 		//Update the history
 		history = realloc(history, (historyLen+1)*sizeof(char*));

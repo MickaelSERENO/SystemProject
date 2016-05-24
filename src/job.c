@@ -144,4 +144,3 @@ void childThread(char* path, char** argv)
 	if(execv(argv[0], argv) == -1)
 		exit(-1);
 }
-

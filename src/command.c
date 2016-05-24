@@ -111,6 +111,8 @@ void execCommand(char* command, uint8_t endJob)
 		out = inPipe[1];
 	}
 
+	int parent = 0;
+
 	//Then treat them if they are arguments for the shell itself
 	//cd: If we change the current directory
 	if(!strcmp(argv[0], "cd"))
@@ -124,7 +126,10 @@ void execCommand(char* command, uint8_t endJob)
 		{
 			uint32_t i;
 			for(i=0; i < historyLen; i++)
+			{
 				write(out, history[i], strlen(history[i]));
+				write(out, "\n", 1);
+			}
 		}
 	}
 
@@ -203,12 +208,29 @@ void execCommand(char* command, uint8_t endJob)
 	//copy
 	else if(!strcmp(argv[0], "cp") && argv[1] != NULL && argv[2] != NULL)
 		copy(argv[1], argv[2]);
+
+	else if(!strcmp(argv[0], "wait"))
+	{
+		for(int i=1; argv[i]; i++)
+		{
+			int pid = atoi(argv[i]);
+			int wstatus;
+			waitpid(pid, &wstatus, WUNTRACED);
+		}
+
+		if(argv[1] == NULL)
+		{
+			int wstatus;
+			wait(&wstatus);
+		}
+	}
 	
 	//Else we execute the command line
 	else
 	{
 		//Get the path of the program called
 		char* programName    = argv[0];
+
 		uint8_t correctProgramName = 1;
 		if(access(programName, X_OK) == -1) //If the program isn't in our current directory
 		{
@@ -223,6 +245,8 @@ void execCommand(char* command, uint8_t endJob)
 			{
 				//Get the full path
 				char testProgram[1024];
+
+
 				strcpy(testProgram, splitPath[i]);
 				if(splitPath[i][strlen(splitPath[i])-1] == '/')
 					strcpy(testProgram + strlen(splitPath[i]), argv[0]);
@@ -292,6 +316,7 @@ void execCommand(char* command, uint8_t endJob)
 			//We are the parent
 			else
 			{
+				parent = 1;
 				//Save this child id
 				jobID[nbJob-1].childID[jobID[nbJob-1].nbChild].pid     = pid;
 				jobID[nbJob-1].childID[jobID[nbJob-1].nbChild].stopped = 0;
@@ -318,7 +343,12 @@ void execCommand(char* command, uint8_t endJob)
 				if(endJob)
 					waitChild(nbJob-1, jobID[nbJob-1].nbChild-1);	
 			}
+
 		}
+	}
+	if(endJob && !parent)
+	{
+		nbJob--;
 	}
 
 	hasPipedStdin = 1;
@@ -326,6 +356,8 @@ void execCommand(char* command, uint8_t endJob)
 		stdinPipe[i] = inPipe[i];
 
 	EndFor:
+	if(endJob && !commandCorrect)
+		nbJob--;
 	for(i=0; argv[i]; i++)
 		free(argv[i]);
 

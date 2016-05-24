@@ -15,7 +15,6 @@ void cd(char** argv)
 		}
 		else
 			strcpy(path, argv[1]);
-		printf("path %s argv[1] %s \n", path, argv[1]);
 		if(chdir(path) == -1)
 			printf("Error in cd command \n");
 	}
