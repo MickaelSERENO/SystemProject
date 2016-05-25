@@ -43,7 +43,10 @@ void execCommand(char* command, uint8_t endJob)
 						stdoutMode = 'a';
 					}
 					else
+					{
 						strcpy(stdoutFileName, &(argv[i][j+1]));
+						stdoutMode = 'w';
+					}
 					pipe(stdoutPipe);
 					hasPipedStdout=1;
 				}
@@ -57,7 +60,10 @@ void execCommand(char* command, uint8_t endJob)
 						stdoutMode = 'a';
 					}
 					else
+					{
 						strcpy(stderrFileName, &(argv[i][j+1]));
+						stderrMode = 'w';
+					}
 					pipe(stderrPipe);
 					hasPipedStderr=1;
 				}
@@ -81,7 +87,7 @@ void execCommand(char* command, uint8_t endJob)
 	{
 		//Create this file if doesn't exist
 		if(access(stderrFileName, F_OK) == -1)
-			creat(stderrFileName, 0777);
+			creat(stderrFileName, 0664);
 
 		if(stderrMode == 'a')
 			err=open(stderrFileName, O_WRONLY | O_APPEND);
