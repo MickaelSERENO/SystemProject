@@ -37,10 +37,21 @@ void touch(char** argv)
 		//Or set its time access
 		else
 		{
-			struct utimbuf t;
-			t.actime = setAccessTime;
-			t.modtime = setModifTime;
-			utime(fileNames[i], &t);
+			struct utimbuf b;
+			struct stat t;
+
+			stat(fileNames[i], &t);
+			if(setModifTime)
+				b.modtime = time(NULL);
+			else
+				b.modtime = t.st_mtime;
+
+			if(setAccessTime)
+				b.actime = time(NULL);
+			else
+				b.actime = t.st_atime;
+
+			utime(fileNames[i], &b);
 		}
 	}
 }
